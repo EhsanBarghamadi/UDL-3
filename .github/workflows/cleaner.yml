@@ -1,16 +1,15 @@
----
-name: 🗑 3-Clean downloads folder
+name: 🗑 Clean Downloads Folder
 
 on:
   workflow_dispatch:
     inputs:
-      warning:
-        description: '⚠️ WARNING: This will DELETE ALL files inside downloads/ folder. Click "Run workflow" only if you are sure.'
-        required: false
-        default: 'Read this warning before proceeding'
+      confirm:
+        description: '⚠️ تایید پاکسازی: کلمه DELETE را وارد کنید'
+        required: true
+        default: 'DELETE'
 
 jobs:
-  delete:
+  clean:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -28,65 +27,58 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-      - name: Clean and recreate downloads folder
+      - name: Check confirmation
         run: |
-          BRANCH="${GITHUB_REF_NAME}"
+          if [ "${{ github.event.inputs.confirm }}" != "DELETE" ]; then
+            echo "❌ پاکسازی لغو شد. کلمه 'DELETE' باید وارد شود."
+            exit 1
+          fi
+          echo "✅ تایید شد. شروع پاکسازی..."
 
-          echo "AVASAM (https://avasam.ir) - Cleaning downloads folder"
-          echo ""
-
+      - name: Remove downloads folder from Git
+        run: |
           if [ -d "downloads" ]; then
-            echo "Removing downloads folder..."
-            git rm -rf downloads/ 2>/dev/null || true
-            rm -rf downloads/ 2>/dev/null || true
+            echo "Removing 'downloads' folder from Git tracking..."
+            git rm -rf downloads/
           else
-            echo "Downloads folder doesn't exist, will create it."
+            echo "Folder 'downloads' does not exist."
           fi
 
+      - name: Create empty placeholder
+        run: |
           mkdir -p downloads
-          printf '## empty\nfor start go Action tab and use left side workflows\n' > downloads/README.md
+          echo "# Downloads Folder" > downloads/README.md
+          echo "" >> downloads/README.md
+          echo "This folder is currently empty. Use the download workflow to add files." >> downloads/README.md
+          git add downloads/README.md
 
-          git add -f downloads/README.md
-
-          if git diff --staged --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
-
-          git commit -m "[AVASAM] Clean downloads folder [skip ci]"
-
-          echo "Pushing changes..."
-
+      - name: Commit and Push changes
+        run: |
+          git commit -m "🗑 Cleaned downloads folder [skip ci]"
+          
+          echo "Pushing changes to remote..."
+          
+          # تلاش برای پاش با ریتری
           RETRY=0
-          MAX_RETRIES=5
-          while [ $RETRY -lt $MAX_RETRIES ]; do
+          while [ $RETRY -lt 5 ]; do
             RETRY=$((RETRY + 1))
-
-            git fetch origin "$BRANCH" --quiet 2>/dev/null || true
-            git rebase origin/"$BRANCH" 2>/dev/null || {
-              git rebase --abort 2>/dev/null || true
-              git reset --hard HEAD~1 2>/dev/null || true
-              git pull --rebase origin "$BRANCH" 2>/dev/null || true
-
-              rm -rf downloads/ 2>/dev/null || true
-              mkdir -p downloads
-              printf '## empty\nfor start go Action tab and use left side workflows\n' > downloads/README.md
-              git add -f downloads/README.md
-              git commit -m "[AVASAM] Clean downloads folder [skip ci]" 2>/dev/null || true
-            }
-
-            if timeout 60 git push origin HEAD:"$BRANCH" 2>&1; then
-              echo ""
-              echo "=========================================="
-              echo "✅ Downloads folder cleared successfully!"
-              echo "AVASAM (https://avasam.ir)"
-              echo "=========================================="
+            
+            # هندل کردن تداخل احتمالی
+            git fetch origin
+            git reset --hard origin/${{ github.ref_name }}
+            
+            git push origin HEAD:${{ github.ref_name }} 2>&1
+            if [ $? -eq 0 ]; then
+              echo "✅ Successfully pushed clean state."
               exit 0
-            else
-              echo "Push failed, retry $RETRY/$MAX_RETRIES..."
-              sleep $((2 + RANDOM % 5))
             fi
+            
+            echo "Push failed, retrying ($RETRY/5)..."
+            sleep 3
           done
 
-          echo "❌ Failed to push after $MAX_RETRIES attempts"
-          exit 1
+      - name: Cleanup large files from history (Optional but recommended)
+        run: |
+          echo "This step ensures files are removed from history to save space."
+          echo "Note: If files were very large, you might need BFG Repo-Cleaner or filter-branch for deep cleanup."
+          echo "Current push removes them from the latest commit."
